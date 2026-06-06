@@ -20,8 +20,17 @@ function mgr_add_menu() {
 
 function mgr_register_settings() {
 	register_setting( 'mgr_settings', 'mgr_api_key',  [ 'sanitize_callback' => 'sanitize_text_field' ] );
-	register_setting( 'mgr_settings', 'mgr_place_id', [ 'sanitize_callback' => 'sanitize_text_field' ] );
 	register_setting( 'mgr_settings', 'mgr_language', [ 'sanitize_callback' => 'sanitize_text_field', 'default' => 'en' ] );
+	register_setting( 'mgr_settings', 'mgr_maps_url', [
+		'sanitize_callback' => function( $val ) {
+			$val = esc_url_raw( trim( $val ) );
+			// If the URL changed, clear the cached Place ID so it gets re-resolved on next sync
+			if ( $val !== get_option( 'mgr_maps_url' ) ) {
+				delete_option( 'mgr_place_id' );
+			}
+			return $val;
+		},
+	] );
 }
 
 function mgr_handle_manual_sync() {
@@ -82,10 +91,20 @@ function mgr_render_admin_page() {
 					<td><input type="password" id="mgr_api_key" name="mgr_api_key" value="<?php echo esc_attr( get_option( 'mgr_api_key' ) ); ?>" class="regular-text" /></td>
 				</tr>
 				<tr>
-					<th><label for="mgr_place_id">Place ID</label></th>
+					<th><label for="mgr_maps_url">Google Maps URL</label></th>
 					<td>
-						<input type="text" id="mgr_place_id" name="mgr_place_id" value="<?php echo esc_attr( get_option( 'mgr_place_id' ) ); ?>" class="regular-text" />
-						<p class="description">Find your Place ID at <a href="https://developers.google.com/maps/documentation/javascript/examples/places-placeid-finder" target="_blank">Google Place ID Finder</a>.</p>
+						<input type="url" id="mgr_maps_url" name="mgr_maps_url" value="<?php echo esc_attr( get_option( 'mgr_maps_url' ) ); ?>" class="large-text" placeholder="https://www.google.com/maps/place/Your+Business/@..." />
+						<p class="description">
+							Paste the URL directly from your Google Maps business listing.<br>
+							<?php
+							$resolved_id = get_option( 'mgr_place_id', '' );
+							if ( $resolved_id ) {
+								echo '<span style="color:#2ea44f">&#10003; Place ID resolved: <code>' . esc_html( $resolved_id ) . '</code></span>';
+							} else {
+								echo '<span style="color:#888">Place ID will be resolved automatically on first sync.</span>';
+							}
+							?>
+						</p>
 					</td>
 				</tr>
 				<tr>
@@ -114,7 +133,7 @@ function mgr_render_admin_page() {
 
 		<h2>Stored Reviews (<?php echo count( $reviews ); ?>)</h2>
 		<?php if ( ! $reviews ) : ?>
-			<p>No reviews yet. Configure your API key and Place ID, then click Sync Now.</p>
+			<p>No reviews yet. Paste your Google Maps URL, add your API key, then click Sync Now.</p>
 		<?php else : ?>
 			<table class="widefat striped" style="max-width:900px">
 				<thead>
