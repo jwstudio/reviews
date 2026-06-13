@@ -3,6 +3,7 @@ defined( 'ABSPATH' ) || exit;
 
 require_once get_template_directory() . '/inc/db.php';
 require_once get_template_directory() . '/inc/dashboard.php';
+require_once get_template_directory() . '/inc/company-view.php';
 require_once get_template_directory() . '/inc/companies.php';
 require_once get_template_directory() . '/inc/contacts.php';
 

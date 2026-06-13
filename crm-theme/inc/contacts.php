@@ -1,26 +1,36 @@
 <?php
 defined( 'ABSPATH' ) || exit;
 
-function crm_contacts_page() {
-    global $wpdb;
-    $t_contacts  = $wpdb->prefix . 'crm_contacts';
-    $t_companies = $wpdb->prefix . 'crm_companies';
-    $t_pivot     = $wpdb->prefix . 'crm_company_contact';
-    $msg         = '';
+// ---------------------------------------------------------------------------
+// Form & delete handlers — run in admin_init so wp_redirect works before output
+// ---------------------------------------------------------------------------
 
-    // --- DELETE ---
-    if ( isset( $_GET['action'], $_GET['id'], $_GET['_wpnonce'] )
+add_action( 'admin_init', function () {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        return;
+    }
+
+    global $wpdb;
+    $t_contacts = $wpdb->prefix . 'crm_contacts';
+    $t_pivot    = $wpdb->prefix . 'crm_company_contact';
+
+    // DELETE
+    if (
+        isset( $_GET['page'], $_GET['action'], $_GET['id'], $_GET['_wpnonce'] )
+        && $_GET['page'] === 'crm-contacts'
         && $_GET['action'] === 'delete'
         && wp_verify_nonce( sanitize_key( $_GET['_wpnonce'] ), 'crm_delete_contact' )
     ) {
         $id = absint( $_GET['id'] );
         $wpdb->delete( $t_pivot, [ 'contact_id' => $id ], [ '%d' ] );
         $wpdb->delete( $t_contacts, [ 'id' => $id ], [ '%d' ] );
-        $msg = '<div class="alert alert-success">Contact deleted.</div>';
+        wp_redirect( admin_url( 'admin.php?page=crm-contacts&notice=deleted' ) );
+        exit;
     }
 
-    // --- SAVE ---
-    if ( isset( $_POST['crm_contact_nonce'] )
+    // SAVE (add or edit)
+    if (
+        isset( $_POST['crm_contact_nonce'] )
         && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['crm_contact_nonce'] ) ), 'crm_save_contact' )
     ) {
         $data = [
@@ -30,21 +40,23 @@ function crm_contacts_page() {
             'phone'      => sanitize_text_field( wp_unslash( $_POST['phone'] ?? '' ) ),
             'linkedin'   => esc_url_raw( wp_unslash( $_POST['linkedin'] ?? '' ) ),
             'notes'      => sanitize_textarea_field( wp_unslash( $_POST['notes'] ?? '' ) ),
+            'converted'  => isset( $_POST['converted'] ) ? 1 : 0,
+            'active'     => isset( $_POST['active'] ) ? 1 : 0,
         ];
-        $fmt = [ '%s', '%s', '%s', '%s', '%s', '%s' ];
+        $fmt = [ '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d' ];
 
-        $edit_id    = absint( $_POST['edit_id'] ?? 0 );
+        $edit_id     = absint( $_POST['edit_id'] ?? 0 );
         $company_ids = array_map( 'absint', (array) ( $_POST['company_ids'] ?? [] ) );
 
         if ( $edit_id ) {
             $wpdb->update( $t_contacts, $data, [ 'id' => $edit_id ], $fmt, [ '%d' ] );
             $contact_id = $edit_id;
             $wpdb->delete( $t_pivot, [ 'contact_id' => $contact_id ], [ '%d' ] );
-            $msg = '<div class="alert alert-success">Contact updated.</div>';
+            $notice = 'updated';
         } else {
             $wpdb->insert( $t_contacts, $data, $fmt );
             $contact_id = $wpdb->insert_id;
-            $msg = '<div class="alert alert-success">Contact added.</div>';
+            $notice = 'added';
         }
 
         foreach ( $company_ids as $cid ) {
@@ -52,9 +64,30 @@ function crm_contacts_page() {
                 $wpdb->replace( $t_pivot, [ 'company_id' => $cid, 'contact_id' => $contact_id ], [ '%d', '%d' ] );
             }
         }
-    }
 
-    // --- LOAD EDIT ROW ---
+        wp_redirect( admin_url( 'admin.php?page=crm-contacts&notice=' . $notice ) );
+        exit;
+    }
+} );
+
+// ---------------------------------------------------------------------------
+// Page display
+// ---------------------------------------------------------------------------
+
+function crm_contacts_page() {
+    global $wpdb;
+    $t_contacts  = $wpdb->prefix . 'crm_contacts';
+    $t_companies = $wpdb->prefix . 'crm_companies';
+    $t_pivot     = $wpdb->prefix . 'crm_company_contact';
+
+    $notices = [
+        'added'   => '<div class="alert alert-success">Contact added.</div>',
+        'updated' => '<div class="alert alert-success">Contact updated.</div>',
+        'deleted' => '<div class="alert alert-warning">Contact deleted.</div>',
+    ];
+    $msg = $notices[ sanitize_key( $_GET['notice'] ?? '' ) ] ?? '';
+
+    // LOAD EDIT ROW
     $edit             = null;
     $edit_company_ids = [];
     if ( isset( $_GET['action'], $_GET['id'] ) && $_GET['action'] === 'edit' ) {
@@ -68,7 +101,6 @@ function crm_contacts_page() {
 
     $all_companies = $wpdb->get_results( "SELECT id, company_name FROM $t_companies ORDER BY company_name ASC" );
 
-    // --- LIST with company names ---
     $contacts = $wpdb->get_results(
         "SELECT c.*, GROUP_CONCAT(co.company_name ORDER BY co.company_name SEPARATOR ', ') AS companies
          FROM $t_contacts c
@@ -115,6 +147,26 @@ function crm_contacts_page() {
                             <input type="url" name="linkedin" class="form-control"
                                 value="<?php echo $edit ? esc_attr( $edit->linkedin ) : ''; ?>">
                         </div>
+                        <div class="col-md-2">
+                            <label class="form-label d-block">Converted</label>
+                            <div class="form-check form-switch mt-1">
+                                <input class="form-check-input" type="checkbox" role="switch"
+                                    name="converted" id="converted"
+                                    <?php echo ( ! $edit || $edit->converted ) ? 'checked' : ''; ?>>
+                                <label class="form-check-label" for="converted">Client</label>
+                            </div>
+                            <div class="form-text">Off = enquiry only</div>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label d-block">Status</label>
+                            <div class="form-check form-switch mt-1">
+                                <input class="form-check-input" type="checkbox" role="switch"
+                                    name="active" id="active"
+                                    <?php echo ( ! $edit || $edit->active ) ? 'checked' : ''; ?>>
+                                <label class="form-check-label" for="active">Active</label>
+                            </div>
+                            <div class="form-text">Off = inactive</div>
+                        </div>
                         <div class="col-md-12">
                             <label class="form-label">Companies</label>
                             <select name="company_ids[]" class="form-select" multiple size="4">
@@ -156,6 +208,7 @@ function crm_contacts_page() {
                             <th>Phone</th>
                             <th>LinkedIn</th>
                             <th>Companies</th>
+                            <th>Status</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -176,6 +229,18 @@ function crm_contacts_page() {
                                 <?php endif; ?>
                             </td>
                             <td>
+                                <?php if ( $c->converted ) : ?>
+                                    <span class="badge bg-success">Client</span>
+                                <?php else : ?>
+                                    <span class="badge bg-secondary">Enquiry</span>
+                                <?php endif; ?>
+                                <?php if ( $c->active ) : ?>
+                                    <span class="badge bg-primary ms-1">Active</span>
+                                <?php else : ?>
+                                    <span class="badge bg-light text-muted border ms-1">Inactive</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
                                 <a href="<?php echo esc_url( admin_url( 'admin.php?page=crm-contacts&action=edit&id=' . $c->id ) ); ?>"
                                    class="btn btn-sm btn-outline-primary">Edit</a>
                                 <a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin.php?page=crm-contacts&action=delete&id=' . $c->id ), 'crm_delete_contact' ) ); ?>"
@@ -184,7 +249,7 @@ function crm_contacts_page() {
                             </td>
                         </tr>
                     <?php endforeach; else : ?>
-                        <tr><td colspan="6" class="text-muted text-center py-4">No contacts yet.</td></tr>
+                        <tr><td colspan="7" class="text-muted text-center py-4">No contacts yet.</td></tr>
                     <?php endif; ?>
                     </tbody>
                 </table>
